@@ -5,6 +5,7 @@ import struct
 import gc
 
 class BHY:
+    board_version = 0
     com_buffer = bytes(9482)
     # Data Type and Dimesion definitions
     BHY_DT_PADDING = {'id': 0, 'name': 'Padding', 'fifo_size': 1}
@@ -117,11 +118,12 @@ class BHY:
     BHY_HOST_UPLOAD_ENABLE = (1<<1).to_bytes(1,'big')
     BHY_FIFO_FLUSH_ALL = b'\xFF'
 
-    def __init__(self, sda=22, scl=23, address=0x28, int_pin = 0, stand_alone = False, debug = False):
-        self.i2c = I2C(1, sda=Pin(sda), scl=Pin(scl))
+    def __init__(self, MAIN_I2C, address=0x28, interrupt_pin = 0, board_version = 2, stand_alone = False, debug = False):
+        self.i2c = MAIN_I2C
+        self.board_version = board_version
 
-        if int_pin:
-            self.int_pin = Pin(int_pin)
+        if interrupt_pin:
+            self.int_pin = Pin(interrupt_pin)
         else:
             self.int_pin = 0
 
@@ -142,6 +144,8 @@ class BHY:
             print(msg)
 
     def bhy_interrupt(self):
+        if self.int_pin:
+            return self.int_pin.value()
         out = int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Int_Status, 1),'big', False) & 1
         return out
 
@@ -176,38 +180,38 @@ class BHY:
         # Actually write the configuration
         return self.writeParameterPage(self.BHY_SYSTEM_PAGE, self.BHY_PARAM_SYSTEM_PHYSICAL_SENSOR_DETAIL_0 + sensor_id, buf)
 
-
     def dump_Chip_status(self):
         out = ""
         out += "\n\n---Reading chip status---\n"
         rom_version = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_ROM_Version, 2)
-        out += "ROM version is: ", binascii.hexlify(rom_version)
+        out += "\nROM version is: " + str(binascii.hexlify(rom_version))
         product_id = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Product_ID, 1)
-        out += "Product ID is: ", binascii.hexlify(product_id)
+        out += "\nProduct ID is: " + str(binascii.hexlify(product_id))
         revision_id = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Revision_ID, 1)
-        out += "Revision ID is: ", binascii.hexlify(revision_id)
+        out += "\nRevision ID is: " + str(binascii.hexlify(revision_id))
 
         chip_status = int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Chip_Status, 1),'big', False)
 
         if(chip_status & 1):
-            out += "\t-EEPROM Detected!"
+            out += "\n\t-EEPROM Detected!"
         if(chip_status & 2):
-            out += "\t-EEUploadDone!"
+            out += "\n\t-EEUploadDone!"
         if(chip_status & 4):
-            out += "\t-EEUploadError!"
+            out += "\n\t-EEUploadError!"
         if(chip_status & 8):
-            out += "\t-Firmware Idle (halted)!"
+            out += "\n\t-Firmware Idle (halted)!"
         if(chip_status & 16):
-            out += "\t-No EEPROM!"
+            out += "\n\t-No EEPROM!"
 
         ram_version = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_RAM_Version, 4)
-        out += "Ram version is: ", binascii.hexlify(ram_version)
+        out += "\n\nRam version is: " + str(binascii.hexlify(ram_version))
 
         self.BHY_crc = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Upload_CRC, 4)
-        out += "BHI CRC:", binascii.hexlify(self.BHY_crc)
-        out += "------------------------\n"
+        out += "\nBHI CRC:" + str(binascii.hexlify(self.BHY_crc))
+        out += "\n------------------------\n\n"
 
         return out
+   
     # Perdoname madre por mi vida loca
     def swap(self, x):
         r = bytearray()
