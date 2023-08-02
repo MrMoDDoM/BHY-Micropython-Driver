@@ -118,12 +118,13 @@ class BHY:
     BHY_HOST_UPLOAD_ENABLE = (1<<1).to_bytes(1,'big')
     BHY_FIFO_FLUSH_ALL = b'\xFF'
 
-    def __init__(self, MAIN_I2C, address=0x28, interrupt_pin = 0, board_version = 2, stand_alone = False, debug = False):
-        self.i2c = MAIN_I2C
-        self.board_version = board_version
 
-        if interrupt_pin:
-            self.int_pin = Pin(interrupt_pin)
+    def __init__(self, MAIN_I2C, address=0x28, int_pin = 0, stand_alone = False, board_version = 2, debug = False):
+        self.i2c = MAIN_I2C
+
+        if int_pin:
+            self.int_pin = Pin(int_pin)
+            self.int_pin.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=self.bhy_int_handler)
         else:
             self.int_pin = 0
 
@@ -138,6 +139,8 @@ class BHY:
         
         self.debug = debug
         self.commBuffer = bytearray()
+        self.board_version = board_version
+        self.int_status = 0
 
     def printDebug(self, msg):
         if self.debug:
@@ -148,6 +151,10 @@ class BHY:
             return self.int_pin.value()
         out = int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Int_Status, 1),'big', False) & 1
         return out
+    
+    def bhy_int_handler(self, pin):
+        print("Interrupt! self.int_status is " + str(self.int_status) )
+        self.int_status = not self.int_status
 
     # TODO: maybe implement a systeam to parse the raw data into a more readable matrix
     def getRemappingMatrix(self, sensor_id):
@@ -204,7 +211,7 @@ class BHY:
             out += "\n\t-No EEPROM!"
 
         ram_version = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_RAM_Version, 4)
-        out += "\n\nRam version is: " + str(binascii.hexlify(ram_version))
+        out += "\nRam version is: " + str(binascii.hexlify(ram_version))
 
         self.BHY_crc = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Upload_CRC, 4)
         out += "\nBHI CRC:" + str(binascii.hexlify(self.BHY_crc))
@@ -225,7 +232,7 @@ class BHY:
         count = 0
         my_crc = 0
         
-        self.printDebug("Chip control BEFORE RESET is" + str(int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Chip_Control, 1),'big', False))) # OH GOD BYTES
+        self.printDebug("Chip control BEFORE RESET is " + str(int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Chip_Control, 1),'big', False))) # OH GOD BYTES
 
         # Request BHI to reset
         self.printDebug("Resetting the BHI")
@@ -235,9 +242,9 @@ class BHY:
         
         # Set the BHI to UploadMode, writing 1 to the HOST_UPLOAD_ENABLE of the Chip Control Register
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_Chip_Control, self.BHY_HOST_UPLOAD_ENABLE)
-        self.printDebug("Chip control AFTER SETTING/RESETING is" + str(int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Chip_Control, 1),'big', False))) # OH GOD BYTES
+        self.printDebug("Chip control AFTER SETTING/RESETING is " + str(int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Chip_Control, 1),'big', False))) # OH GOD BYTES
 
-        # Settina Upload_address point at 0x0
+        # Setting Upload_address point at 0x0
         self.printDebug("Resetting data writing position")
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_Upload_Adress, b'\x00')
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_Upload_Adress+1, b'\x00')
@@ -264,7 +271,7 @@ class BHY:
             #sleep_ms(1)
             count += 4
 
-        self.printDebug("Written" + str(count) + str("bytes to BHI160B!"))
+        self.printDebug("Written " + str(count) + str(" bytes to BHI160B!"))
 
         # Wait a few millisecond - TODO: WE SHOULD USE THE INTERRUPT ONCE WE HAVE IT
         sleep_ms(100)
@@ -272,7 +279,7 @@ class BHY:
         
         self.printDebug("Stored CRC:" + str(binascii.hexlify(fw_crc)))
         self.printDebug("BHI CRC:" + str(binascii.hexlify(self.BHY_crc)))
-        self.printDebug("Calculated CRC:" + str(hex(my_crc)))
+        self.printDebug("Calculated CRC:" + str(hex(my_crc))) # TODO: find a way to calculate the corret CRC
         if self.BHY_crc == fw_crc:
             self.printDebug("\tUpload CRC match stored CRC!")
             return True
