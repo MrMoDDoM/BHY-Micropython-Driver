@@ -3,6 +3,7 @@ from machine import I2C, Pin
 import binascii
 import struct
 import gc
+import os
 
 class BHY:
     board_version = 0
@@ -121,26 +122,55 @@ class BHY:
 
     def __init__(self, MAIN_I2C, address=0x28, int_pin = 0, stand_alone = False, board_version = 2, debug = False):
         self.i2c = MAIN_I2C
-
-        if int_pin:
-            self.int_pin = Pin(int_pin)
-            self.int_pin.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=self.bhy_int_handler)
-        else:
-            self.int_pin = 0
-
-        self.BHY_ADDR = address
-        self.fw_file = "BHY/fw_bin/"
-        if stand_alone:
-            # Stand-alone BHI160B
-            self.fw_file += "bosch_pcb_7183_di03_bmi160-7183_di03-2-1-11824.fw"
-        else:
-            # Integrated with BMM150
-            self.fw_file += "bosch_pcb_7183_di03_bmi160_bmm150-7183_di03-2-1-11824.fw"
-        
         self.debug = debug
         self.commBuffer = bytearray()
         self.board_version = board_version
         self.int_status = 0
+
+        if int_pin:
+            self.int_pin = Pin(int_pin, Pin.IN)
+            #self.int_pin.irq(trigger=Pin.IRQ_RISING | Pin.IRQ_FALLING, handler=self.bhy_int_handler)
+            self.int_pin.irq(trigger=Pin.IRQ_RISING, handler=self.bhy_int_handler)
+        else:
+            self.int_pin = 0
+
+        self.BHY_ADDR = address
+
+        # WE NEED TO CHECK THE CORRECT BHI HW VERSION
+        # Since JLCPCB decided to ship me the wrong version, a BHI160 instad of the BHI160B
+        # (damn you JLCPCB, you had one job!)
+        self.bhy_version = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_ROM_Version, 2)
+        if (self.bhy_version[1] == 0x21):
+            self.bhy_version = "BHI160"
+        elif (self.bhy_version[1] == 0x2D):
+            self.bhy_version = "BHI160B"
+        else:
+            self.bhy_version = "Unknown"
+            
+        self.printDebug("BHI version is: " + self.bhy_version)
+
+        self.fw_file = "BHY/fw_bin/"
+        if stand_alone:
+            if self.bhy_version == "BHI160":
+                # Stand-alone BHI160
+                self.fw_file += "Bosch_PCB_7183_di01_BMI160-7183_di01.2.1.10836_170103.fw"
+            elif self.bhy_version == "BHI160B":
+                # Stand-alone BHI160B
+                self.fw_file += "bosch_pcb_7183_di03_bmi160-7183_di03-2-1-11824.fw"
+        else:
+            if self.bhy_version == "BHI160":
+                # BHI160 integrated with BMM150
+                self.fw_file += "Bosch_PCB_7183_di01_BMI160_BMM150-7183_di01.2.1.10836_170103.fw"
+            elif self.bhy_version == "BHI160B":
+                # BHI160B integrated with BMM150
+                self.fw_file += "bosch_pcb_7183_di03_bmi160_bmm150-7183_di03-2-1-11824.fw"
+
+        try:
+            os.stat(self.fw_file)
+            self.printDebug("Firmware file is: " + self.fw_file)
+        except:
+            print("BHI160(B) firmware file not found!")
+
 
     def printDebug(self, msg):
         if self.debug:
@@ -153,8 +183,9 @@ class BHY:
         return out
     
     def bhy_int_handler(self, pin):
+        self.int_status = self.int_pin.value()
+        #out = int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Int_Status, 1),'big', False) & 1
         print("Interrupt! self.int_status is " + str(self.int_status) )
-        self.int_status = not self.int_status
 
     # TODO: maybe implement a systeam to parse the raw data into a more readable matrix
     def getRemappingMatrix(self, sensor_id):
@@ -190,6 +221,7 @@ class BHY:
     def dump_Chip_status(self):
         out = ""
         out += "\n\n---Reading chip status---\n"
+        out += "\nBHY Version is: " + self.bhy_version
         rom_version = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_ROM_Version, 2)
         out += "\nROM version is: " + str(binascii.hexlify(rom_version))
         product_id = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Product_ID, 1)
@@ -249,6 +281,7 @@ class BHY:
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_Upload_Adress, b'\x00')
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_Upload_Adress+1, b'\x00')
 
+        self.printDebug("Opening RAM file: " + self.fw_file)
         f = open(self.fw_file, 'rb')
 
         header_1 = f.read(4) # Something
@@ -332,6 +365,7 @@ class BHY:
         ack = 0
         for i in range(1000): # Polling the register a bunch of times.. maybe less?
             ack = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_PARAMETER_ACKNOWLEDGE_ADDR, 1)
+            #print("ACK is " + str(ack))
 
             if ack == parameter.to_bytes(1, 'big'): # Fuck python bytes
                 return True
@@ -343,13 +377,13 @@ class BHY:
         return False # Error selecting page
 
     def readParameterPage(self, page, parameter, length = 8):
-        self.printDebug("About to READ" + str(length) + "byte from page:" + str(page) + " - parameter:" + str(parameter))
+        self.printDebug("About to READ " + str(length) + " byte from page: " + str(page) + " - parameter: " + str(parameter))
         # We ask the BHY for a particular parameter in a particular page with READ condition
         if self.pageSelect(page, parameter, rw = False):
             # Ok we have the correct data within the BHY buffer, we must read it!
             ret = self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_PARAMETER_READ_BUFFER_ZERO, length)
         else: # We didn't get the ack
-            self.printDebug("Parameter page select FAILED! Page:" + str(page) + "- Parameter:" + str(parameter))
+            self.printDebug("Parameter page select FAILED! Page: " + str(page) + "- Parameter: " + str(parameter))
             ret = 0
 
         # Finally we end the caratteristics transfer procedure by writing 0 to the Parameter_Request register
@@ -358,12 +392,14 @@ class BHY:
         return ret
         
     def writeParameterPage(self, page, parameter, buffer):
-        self.printDebug("About to write buf:" + str(buffer) + "to page:" + str(page) + " - parameter:" + str(parameter))
+        self.printDebug("About to write buf: " + str(buffer) + "to page: " + str(page) + " - parameter: " + str(parameter))
         # Write data from the local buffer to the bhy buffer
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_PARAMETER_WRITE_BUFFER_ZERO, buffer)
 
         # Give the actual write command by selecting the page destination of the buffer
         ret = self.pageSelect(page, parameter, rw=True) # We want to write
+        if not ret:
+            self.printDebug("Parameter page select FAILED! Page: " + str(page) + " - Parameter: " + str(parameter))
 
         # Finally we end the caratteristics transfer procedure by writing 0 to the Parameter_Request register
         self.i2c.writeto_mem(self.BHY_ADDR, self.BHY_REG_PARAMETER_REQUEST_ADDR, b'\x00')
@@ -399,7 +435,7 @@ class BHY:
         # Computes the param page as sensor_id + 0xC0 (sensor parameter write)
         effectiveId += self.BHY_SENSOR_PARAMETER_WRITE
 
-        # TODO: check if these operations are correct
+        # TODO: check if these operations are correct -- THERE IS A BUG HERE 
         # self.commBuffer.append(samplingRate.to_bytes(2, 'little'))
         # self.commBuffer.append(maxReportLatency.to_bytes(2, 'little'))
         # self.commBuffer.append(changeSensitivity.to_bytes(2, 'little'))
