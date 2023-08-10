@@ -185,7 +185,7 @@ class BHY:
     def bhy_int_handler(self, pin):
         self.int_status = self.int_pin.value()
         #out = int.from_bytes(self.i2c.readfrom_mem(self.BHY_ADDR, self.BHY_REG_Int_Status, 1),'big', False) & 1
-        print("Interrupt! self.int_status is " + str(self.int_status) )
+        self.printDebug("Interrupt! self.int_status is " + str(self.int_status) )
 
     # TODO: maybe implement a systeam to parse the raw data into a more readable matrix
     def getRemappingMatrix(self, sensor_id):
